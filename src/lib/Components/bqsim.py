@@ -483,6 +483,11 @@ class BGQsim(Simulator):
             spec['location'] =tmp.get('exec_host', '')  #used for reservation jobs only
             spec['start_time'] = tmp.get('start', 0)  #used for reservation jobs only
             
+##-------------IO operations related
+            spec['io_cnt'] = 1
+            spec['io_size'] = 1
+            spec['io_frac'] = 0 
+                        
             #add the job spec to the spec list            
             specs.append(spec)
             
@@ -818,6 +823,7 @@ class BGQsim(Simulator):
         
         end = start + duration
         updates['end_time'] = end
+                 
         self.insert_time_stamp(end, "E", {'jobid':jobspec['jobid']})
         
         updates.update(newattr)
@@ -926,7 +932,7 @@ class BGQsim(Simulator):
                 
             if self.reserve_ratio > 0:
                 if self.reservation_violated(self.get_current_time_sec() + 60*runtime_estimate, partition.name):
-                   continue
+                    continue
                 
             if partition.state == "idle":
                 # let's check the impact on partitions that would become blocked

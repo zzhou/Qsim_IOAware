@@ -233,7 +233,10 @@ class Job (Data):
                             "has_resources",
                             "attr",
                             "score",
-                            "remain_time",    
+                            "remain_time",
+                            "io_cnt", 
+                            "io_size",
+                            "io_frac"   
                             ]    
 
     def __init__(self, spec):
@@ -273,6 +276,10 @@ class Job (Data):
         #self.checkpoint = 1
         self.recovering = False
         self.location = spec.get('location', '')  #original location read from job trace, used for job reservation
+        
+        self.io_cnt = spec.get('io_cnt', 0)
+        self.io_size = spec.get('io_size', 0)
+        self.io_frac = spec.get('io_frac', 0)
 
 class JobList(DataList):
     '''the list of job objects'''
