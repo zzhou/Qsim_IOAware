@@ -44,7 +44,7 @@ OPT_RULE = "A1"  # A0, A1, A2, A3, A4, NORMAL, EVEN
 RECOVERYOPT = 2 # by default, the failed job is sent back to the rear of the queue
 CHECKPOINT = False  #not used in this version
 MTTR = 3600   #time to repair partition(in sec), a failed partition will be available again in MTTR seconds,
-SET_event = set(['I', 'Q', 'S', 'E', 'F', 'R', 'U'])
+SET_event = set(['I', 'Q', 'S', 'E', 'F', 'R', 'U', 'W']) ## W is new for io operations
 
 PRINT_SCREEN = True
 

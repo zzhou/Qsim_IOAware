@@ -484,9 +484,9 @@ class BGQsim(Simulator):
             spec['start_time'] = tmp.get('start', 0)  #used for reservation jobs only
             
 ##-------------IO operations related
-            spec['io_cnt'] = 1
+            spec['io_cnt'] = 2
             spec['io_size'] = 1
-            spec['io_frac'] = 0 
+            spec['io_frac'] = 0.2 
                         
             #add the job spec to the spec list            
             specs.append(spec)
@@ -565,7 +565,7 @@ class BGQsim(Simulator):
                 #start reserved job at this time point
                 self.run_reserved_jobs()
                         
-            if cur_event in ["Q", "E"]:
+            if cur_event in ["Q", "E", "W"]:
                 #scheduling related events
                 self.update_job_states(specs, {}, cur_event)
             
@@ -581,7 +581,7 @@ class BGQsim(Simulator):
                     return []
                 
             if cur_event == "C":
-                 if self.job_hold_dict.keys():
+                if self.job_hold_dict.keys():
                     self.unhold_all()
                 
         self.event_manager.set_go_next(True)
@@ -625,9 +625,14 @@ class BGQsim(Simulator):
                 
                   
                 del self.unsubmitted_job_spec_dict[Id]
+            
+            
+            elif cur_event == "W": # handle IO events
+                print "specs", specs
+                print "updates", updates
+                print "cur_event", cur_event
                 
                 
-
             elif cur_event=="E":  # Job (Id) is completed
                 completed_job = self.get_live_job_by_id(Id)
                 
@@ -823,7 +828,20 @@ class BGQsim(Simulator):
         
         end = start + duration
         updates['end_time'] = end
-                 
+        
+        # calculate each io&computation duration
+        # basic assumption:   |---computation---|---IO phase---|---computation---|---IO phase---|---computation---|
+        
+        io_per_duration =  duration * jobspec['io_frac'] / jobspec['io_cnt']
+        io_per_size = jobspec['io_size'] / jobspec['io_cnt']
+        comp_per_duration = duration * (1-jobspec['io_frac']) / (jobspec['io_cnt']+1) 
+        
+#        print duration, jobspec['io_frac'], jobspec['io_cnt'], io_per_duration, comp_per_duration
+        
+        # insert io event
+        self.insert_time_stamp(start + comp_per_duration, "W", {'jobid':jobspec['jobid']})
+        
+        # insert job end event
         self.insert_time_stamp(end, "E", {'jobid':jobspec['jobid']})
         
         updates.update(newattr)
