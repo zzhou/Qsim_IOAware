@@ -561,6 +561,10 @@ class BGQsim(Simulator):
             cur_event = self.event_manager.get_current_event_type()
             cur_event_job = self.event_manager.get_current_event_job
             
+            # retrieve event specs
+            cur_event_specs = self.event_manager.get_current_event_spec()
+            print cur_event_specs
+            
             if cur_event == "S":
                 #start reserved job at this time point
                 self.run_reserved_jobs()
@@ -628,10 +632,9 @@ class BGQsim(Simulator):
             
             
             elif cur_event == "W": # handle IO events
-                print "specs", specs
-                print "updates", updates
-                print "cur_event", cur_event
-                
+                running_job = self.get_live_job_by_id(Id)
+                jobspec = running_job.to_rx()
+                print jobspec
                 
             elif cur_event=="E":  # Job (Id) is completed
                 completed_job = self.get_live_job_by_id(Id)

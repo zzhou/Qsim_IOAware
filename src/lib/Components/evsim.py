@@ -211,6 +211,11 @@ class EventSimulator(Component):
     def get_current_event_machine(self):
         '''return machine which the current event belongs to'''
         return self.event_list[self.time_stamp].get('machine')
+     
+    # return current event specs
+    def get_current_event_spec(self):
+        return self.event_list[self.time_stamp]
+    get_current_event_spec = exposed(get_current_event_spec)
         
     def get_current_event_all(self):
         '''return current event'''
@@ -253,6 +258,7 @@ class EventSimulator(Component):
             evspec['datetime'] = sec_to_date(float(jobspec.get('submittime')))
             evspec['jobid'] = jobspec.get('jobid')
             evspec['location'] = []
+            evspec['specs'] = jobspecs 
             self.add_event(evspec)
 
     add_init_events = exposed(add_init_events)
