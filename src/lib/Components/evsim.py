@@ -183,6 +183,7 @@ class EventSimulator(Component):
     def get_current_time_stamp(self):
         '''return current time stamp'''
         return self.time_stamp
+    get_current_time_stamp = exposed(get_current_time_stamp)
     
     def get_current_time(self):
         '''return current unix time'''
@@ -236,6 +237,7 @@ class EventSimulator(Component):
     
     def clock_increment(self):
         '''the current time stamp increments by 1'''
+       
         if self.time_stamp < len(self.event_list) - 1:
             self.time_stamp += 1
             if SHOW_SCREEN_LOG:

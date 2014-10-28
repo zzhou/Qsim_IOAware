@@ -2,6 +2,19 @@
 
 '''Cobalt Queue Simulator (for Blue Gene systems) library'''
 
+from Cobalt.Components.base import exposed, query, automatic, locking
+from Cobalt.Components.cqm import QueueDict, Queue
+from Cobalt.Components.qsim_base import *
+from Cobalt.Components.simulator import Simulator
+from Cobalt.Data import Data, DataList
+from Cobalt.Exceptions import ComponentLookupError
+from Cobalt.Proxy import ComponentProxy, local_components
+from Cobalt.Server import XMLRPCServer, find_intended_location
+from ConfigParser import SafeConfigParser, NoSectionError, NoOptionError
+from datetime import datetime
+import Cobalt
+import Cobalt.Cqparse
+import Cobalt.Util
 import ConfigParser
 import copy
 import logging
@@ -13,21 +26,8 @@ import signal
 import sys
 import time
 
-from ConfigParser import SafeConfigParser, NoSectionError, NoOptionError
-from datetime import datetime
 
-import Cobalt
-import Cobalt.Cqparse
-import Cobalt.Util
 
-from Cobalt.Components.qsim_base import *
-from Cobalt.Components.base import exposed, query, automatic, locking
-from Cobalt.Components.cqm import QueueDict, Queue
-from Cobalt.Components.simulator import Simulator
-from Cobalt.Data import Data, DataList
-from Cobalt.Exceptions import ComponentLookupError
-from Cobalt.Proxy import ComponentProxy, local_components
-from Cobalt.Server import XMLRPCServer, find_intended_location
 
 REMOTE_QUEUE_MANAGER = "cluster-queue-manager"
 
@@ -264,7 +264,7 @@ class BGQsim(Simulator):
         evspec['unixtime'] = timestamp
         evspec['machine'] = MACHINE_ID
         evspec['location'] = info.get('location', [])
-        
+                   
         self.event_manager.add_event(evspec)
         
     def log_job_event(self, eventtype, timestamp, spec):
@@ -563,15 +563,14 @@ class BGQsim(Simulator):
             
             # retrieve event specs
             cur_event_specs = self.event_manager.get_current_event_spec()
-            print cur_event_specs
             
             if cur_event == "S":
                 #start reserved job at this time point
                 self.run_reserved_jobs()
                         
-            if cur_event in ["Q", "E", "W"]:
+            if cur_event in ["Q", "E", "W", "P"]: ## new event, io---W, computation---P
                 #scheduling related events
-                self.update_job_states(specs, {}, cur_event)
+                self.update_job_states(cur_event_specs, {}, cur_event)
             
             self.compute_utility_scores()
             
@@ -609,8 +608,8 @@ class BGQsim(Simulator):
         
         ids = ids_str.split(':')
         #print "current event=", cur_event, " ", ids
+        
         for Id in ids:
-            
 
             if cur_event == "Q":  # Job (Id) is submitted
                 
@@ -627,14 +626,12 @@ class BGQsim(Simulator):
                 
                 self.log_job_event("Q", self.get_current_time_date(), tempspec)
                 
-                  
                 del self.unsubmitted_job_spec_dict[Id]
             
-            
-            elif cur_event == "W": # handle IO events
-                running_job = self.get_live_job_by_id(Id)
-                jobspec = running_job.to_rx()
-                print jobspec
+            elif cur_event == "W" or cur_event == "P": # handle IO events
+#                print "time stamp:", self.event_manager.get_current_time_stamp()
+                self.update_job_next_event(cur_event, specs)
+                
                 
             elif cur_event=="E":  # Job (Id) is completed
                 completed_job = self.get_live_job_by_id(Id)
@@ -679,7 +676,7 @@ class BGQsim(Simulator):
             self.start_reserved_job(jobid, [reserved_location])
             
     def start_reserved_job(self, jobid, nodelist):
-       # print "%s: start reserved job %s at %s" % (self.get_current_time_date(), jobid, nodelist)
+        # print "%s: start reserved job %s at %s" % (self.get_current_time_date(), jobid, nodelist)
         self.start_job([{'jobid':int(jobid)}], {'location': nodelist})
         del self.reservations[jobid]   
     
@@ -841,16 +838,29 @@ class BGQsim(Simulator):
         
 #        print duration, jobspec['io_frac'], jobspec['io_cnt'], io_per_duration, comp_per_duration
         
-        # insert io event
-        self.insert_time_stamp(start + comp_per_duration, "W", {'jobid':jobspec['jobid']})
+        # job queued ----> running; insert io event
+        self.insert_time_stamp(start + comp_per_duration, "W", {'jobid':jobspec['jobid'], 
+                                                                'io_rest_cnt':jobspec['io_cnt']-1, 
+                                                                'io_per_duration':io_per_duration,
+                                                                'io_per_size':io_per_size,
+                                                                'comp_per_duration':comp_per_duration
+                                                                })
         
         # insert job end event
-        self.insert_time_stamp(end, "E", {'jobid':jobspec['jobid']})
+        #self.insert_time_stamp(end, "E", {'jobid':jobspec['jobid']})
         
         updates.update(newattr)
     
         return updates
     
+    def update_job_next_event(self, type, jobspec):
+        if type == "W":
+            print type, jobspec
+        elif type == "P":
+            print type, jobspec
+            
+        
+        
 ##### system related   
     def init_partition(self, namelist):
         '''add all paritions and apply activate and enable'''
