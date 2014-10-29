@@ -45,6 +45,9 @@ YIELD_THRESHOLD = 0
 
 BESTFIT_BACKFILL = False
 SJF_BACKFILL = True
+
+# bandwidth
+IO_BANDWITH = 10
     
 class BGQsim(Simulator):
     '''Cobalt Queue Simulator for Blue Gene systems'''
@@ -264,6 +267,8 @@ class BGQsim(Simulator):
         evspec['unixtime'] = timestamp
         evspec['machine'] = MACHINE_ID
         evspec['location'] = info.get('location', [])
+        
+        evspec['extra'] = info
                    
         self.event_manager.add_event(evspec)
         
@@ -484,9 +489,9 @@ class BGQsim(Simulator):
             spec['start_time'] = tmp.get('start', 0)  #used for reservation jobs only
             
 ##-------------IO operations related
-            spec['io_cnt'] = 2
-            spec['io_size'] = 1
-            spec['io_frac'] = 0.2 
+            spec['io_cnt'] = 3
+            spec['io_size'] = 100
+            spec['io_frac'] = 0.3 
                         
             #add the job spec to the spec list            
             specs.append(spec)
@@ -610,7 +615,8 @@ class BGQsim(Simulator):
         #print "current event=", cur_event, " ", ids
         
         for Id in ids:
-
+            
+            print cur_event, specs
             if cur_event == "Q":  # Job (Id) is submitted
                 
                 tempspec = self.unsubmitted_job_spec_dict.get(Id, None)
@@ -631,7 +637,6 @@ class BGQsim(Simulator):
             elif cur_event == "W" or cur_event == "P": # handle IO events
 #                print "time stamp:", self.event_manager.get_current_time_stamp()
                 self.update_job_next_event(cur_event, specs)
-                
                 
             elif cur_event=="E":  # Job (Id) is completed
                 completed_job = self.get_live_job_by_id(Id)
@@ -832,22 +837,20 @@ class BGQsim(Simulator):
         # calculate each io&computation duration
         # basic assumption:   |---computation---|---IO phase---|---computation---|---IO phase---|---computation---|
         
-        io_per_duration =  duration * jobspec['io_frac'] / jobspec['io_cnt']
-        io_per_size = jobspec['io_size'] / jobspec['io_cnt']
-        comp_per_duration = duration * (1-jobspec['io_frac']) / (jobspec['io_cnt']+1) 
+        io_per_size = round(jobspec['io_size'] / jobspec['io_cnt'])
+        comp_per_duration = round(duration * (1-jobspec['io_frac']) / (jobspec['io_cnt']+1)) 
         
 #        print duration, jobspec['io_frac'], jobspec['io_cnt'], io_per_duration, comp_per_duration
         
         # job queued ----> running; insert io event
         self.insert_time_stamp(start + comp_per_duration, "W", {'jobid':jobspec['jobid'], 
                                                                 'io_rest_cnt':jobspec['io_cnt']-1, 
-                                                                'io_per_duration':io_per_duration,
                                                                 'io_per_size':io_per_size,
                                                                 'comp_per_duration':comp_per_duration
                                                                 })
         
         # insert job end event
-        #self.insert_time_stamp(end, "E", {'jobid':jobspec['jobid']})
+#        self.insert_time_stamp(end, "E", {'jobid':jobspec['jobid']})
         
         updates.update(newattr)
     
@@ -855,9 +858,38 @@ class BGQsim(Simulator):
     
     def update_job_next_event(self, type, jobspec):
         if type == "W":
-            print type, jobspec
+            current_time = self.get_current_time_sec()
+            io_time = jobspec['extra']['io_per_size'] / ;
+            
+            jobid = jobspec['extra']['jobid']
+            io_rest_cnt = jobspec['extra']['io_rest_cnt']
+            io_per_size = jobspec['extra']['io_per_size']
+            comp_per_duration = jobspec['extra']['comp_per_duration']
+            
+            self.insert_time_stamp(current_time + io_time, "P", {'jobid':jobid,
+                                                                 'io_rest_cnt':io_rest_cnt,
+                                                                 'io_per_size':io_per_size,
+                                                                 'comp_per_duration':comp_per_duration
+                                                                 })
+            
         elif type == "P":
-            print type, jobspec
+            current_time = self.get_current_time_sec()
+            computation_time = jobspec['extra']['comp_per_duration']
+            
+            jobid = jobspec['extra']['jobid']
+            if jobspec['extra']['io_rest_cnt'] == 0:
+                self.insert_time_stamp(current_time + computation_time, "E", {'jobid':jobid})
+                return
+                
+            io_rest_cnt = jobspec['extra']['io_rest_cnt'] - 1
+            io_per_size = jobspec['extra']['io_per_size']
+            comp_per_duration = jobspec['extra']['comp_per_duration']
+            
+            self.insert_time_stamp(current_time + computation_time, "W", {'jobid':jobid,
+                                                                          'io_rest_cnt':io_rest_cnt,
+                                                                          'io_per_size':io_per_size,
+                                                                          'comp_per_duration':comp_per_duration 
+                                                                 })
             
         
         
@@ -1748,7 +1780,7 @@ class BGQsim(Simulator):
         
 #####--end--CoScheduling stuff
 
-     
+    
 #####----------display stuff
     
     def get_midplanes_by_state(self, status):

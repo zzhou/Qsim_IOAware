@@ -166,7 +166,7 @@ class EventSimulator(Component):
         
         while time_sec < self.event_list[pos-1].get('unixtime'):
             pos = pos - 1
-            
+        
         self.event_list.insert(pos, ev_spec)
         #print "insert time stamp ", ev_spec, " at pos ", pos
         return pos
@@ -230,14 +230,19 @@ class EventSimulator(Component):
             return self.get_current_time_date()
     get_next_event_time_sec = exposed(get_next_event_time_sec)
     
-        
+    
     def is_finished(self):
         return self.finished
     is_finished = exposed(is_finished)
     
     def clock_increment(self):
         '''the current time stamp increments by 1'''
-       
+        
+#        print "-----------------------------------"
+#        for item in self.event_list:
+#            print item
+#        print "-----------------------------------"
+            
         if self.time_stamp < len(self.event_list) - 1:
             self.time_stamp += 1
             if SHOW_SCREEN_LOG:
