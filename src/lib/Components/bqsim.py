@@ -282,6 +282,27 @@ class BGQsim(Simulator):
                 return _input
         if eventtype == 'Q':  #submitted(queued) for the first time
             message = "%s;Q;%s;queue=%s" % (timestamp, spec['jobid'], spec['queue'])
+            
+        # log io and computation events
+        elif eventtype == 'W':
+            extra_specs = spec['extra']
+            message = "%s;W;%s;io_rest_cnt=%s io_per_size=%s io_per_duration=%s comp_per_duration=%s" % \
+            (timestamp, spec['jobid'],
+            extra_specs['io_rest_cnt'], 
+            extra_specs['io_per_size'], 
+            extra_specs['io_per_duration'],
+            extra_specs['comp_per_duration'])
+             
+        elif eventtype == 'P':
+            extra_specs = spec['extra']
+            message = "%s;p;%s;io_rest_cnt=%s io_per_size=%s io_per_duration=%s comp_per_duration=%s" % \
+            (timestamp,
+            spec['jobid'],
+            extra_specs['io_rest_cnt'],
+            extra_specs['io_per_size'],
+            extra_specs['io_per_duration'],
+            extra_specs['comp_per_duration'])
+            
         elif eventtype == 'R':  #resume running after failure recovery
             message = "%s;R;%s" % (timestamp, ":".join(spec['location']))
         else:
@@ -312,6 +333,7 @@ class BGQsim(Simulator):
                 (timestamp, spec['jobid'], spec['queue'], spec['submittime'], spec['nodes'], log_walltime, spec['start_time'], 
                  round(float(spec['end_time']), 1), ":".join(spec['location']),
                  spec['runtime'], spec['hold_time'], overhead)
+                
             else:
                 print "invalid event type, type=", eventtype
                 return
@@ -616,7 +638,7 @@ class BGQsim(Simulator):
         
         for Id in ids:
             
-            print cur_event, specs
+            ##print cur_event, specs
             if cur_event == "Q":  # Job (Id) is submitted
                 
                 tempspec = self.unsubmitted_job_spec_dict.get(Id, None)
@@ -636,6 +658,7 @@ class BGQsim(Simulator):
             
             elif cur_event == "W" or cur_event == "P": # handle IO events
 #                print "time stamp:", self.event_manager.get_current_time_stamp()
+                    
                 self.update_job_next_event(cur_event, specs)
                 
             elif cur_event=="E":  # Job (Id) is completed
@@ -837,7 +860,8 @@ class BGQsim(Simulator):
         # calculate each io&computation duration
         # basic assumption:   |---computation---|---IO phase---|---computation---|---IO phase---|---computation---|
         
-        io_per_size = round(jobspec['io_size'] / jobspec['io_cnt'])
+        io_per_duration = round(duration * jobspec['io_frac'] / jobspec['io_cnt'])
+        io_per_size  = round(jobspec['io_size'] / jobspec['io_cnt'])
         comp_per_duration = round(duration * (1-jobspec['io_frac']) / (jobspec['io_cnt']+1)) 
         
 #        print duration, jobspec['io_frac'], jobspec['io_cnt'], io_per_duration, comp_per_duration
@@ -846,6 +870,7 @@ class BGQsim(Simulator):
         self.insert_time_stamp(start + comp_per_duration, "W", {'jobid':jobspec['jobid'], 
                                                                 'io_rest_cnt':jobspec['io_cnt']-1, 
                                                                 'io_per_size':io_per_size,
+                                                                'io_per_duration':io_per_duration,
                                                                 'comp_per_duration':comp_per_duration
                                                                 })
         
@@ -859,7 +884,7 @@ class BGQsim(Simulator):
     def update_job_next_event(self, type, jobspec):
         if type == "W":
             current_time = self.get_current_time_sec()
-            io_time = jobspec['extra']['io_per_size'] / ;
+            io_time = jobspec['extra']['io_per_duration'];
             
             jobid = jobspec['extra']['jobid']
             io_rest_cnt = jobspec['extra']['io_rest_cnt']
@@ -869,8 +894,11 @@ class BGQsim(Simulator):
             self.insert_time_stamp(current_time + io_time, "P", {'jobid':jobid,
                                                                  'io_rest_cnt':io_rest_cnt,
                                                                  'io_per_size':io_per_size,
+                                                                 'io_per_duration':io_time,
                                                                  'comp_per_duration':comp_per_duration
                                                                  })
+            
+            self.log_job_event("W", self.get_current_time_date(), jobspec)
             
         elif type == "P":
             current_time = self.get_current_time_sec()
@@ -881,6 +909,7 @@ class BGQsim(Simulator):
                 self.insert_time_stamp(current_time + computation_time, "E", {'jobid':jobid})
                 return
                 
+            io_time =jobspec['extra']['io_per_duration']
             io_rest_cnt = jobspec['extra']['io_rest_cnt'] - 1
             io_per_size = jobspec['extra']['io_per_size']
             comp_per_duration = jobspec['extra']['comp_per_duration']
@@ -888,11 +917,11 @@ class BGQsim(Simulator):
             self.insert_time_stamp(current_time + computation_time, "W", {'jobid':jobid,
                                                                           'io_rest_cnt':io_rest_cnt,
                                                                           'io_per_size':io_per_size,
+                                                                          'io_per_duration':io_time,
                                                                           'comp_per_duration':comp_per_duration 
                                                                  })
+            self.log_job_event("P", self.get_current_time_date(), jobspec)
             
-        
-        
 ##### system related   
     def init_partition(self, namelist):
         '''add all paritions and apply activate and enable'''
