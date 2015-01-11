@@ -295,7 +295,7 @@ class BGQsim(Simulator):
              
         elif eventtype == 'P':
             extra_specs = spec['extra']
-            message = "%s;p;%s;io_rest_cnt=%s io_per_size=%s io_per_duration=%s comp_per_duration=%s" % \
+            message = "%s;P;%s;io_rest_cnt=%s io_per_size=%s io_per_duration=%s comp_per_duration=%s" % \
             (timestamp,
             spec['jobid'],
             extra_specs['io_rest_cnt'],
