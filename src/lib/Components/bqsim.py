@@ -858,7 +858,7 @@ class BGQsim(Simulator):
         updates['end_time'] = end
         
         # calculate each io&computation duration
-        # basic assumption:   |---computation---|---IO phase---|---computation---|---IO phase---|---computation---|
+        # basic assumption:   |---IO phase---|---computation---|---IO phase---|---computation---|
         
         io_per_duration = round(duration * jobspec['io_frac'] / jobspec['io_cnt'])
         io_per_size  = round(jobspec['io_size'] / jobspec['io_cnt'])
@@ -905,6 +905,9 @@ class BGQsim(Simulator):
             computation_time = jobspec['extra']['comp_per_duration']
             
             jobid = jobspec['extra']['jobid']
+            
+            self.log_job_event("P", self.get_current_time_date(), jobspec)
+            
             if jobspec['extra']['io_rest_cnt'] == 0:
                 self.insert_time_stamp(current_time + computation_time, "E", {'jobid':jobid})
                 return
