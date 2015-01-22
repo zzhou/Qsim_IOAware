@@ -858,7 +858,7 @@ class BGQsim(Simulator):
         updates['end_time'] = end
         
         # calculate each io&computation duration
-        # basic assumption:   |---IO phase---|---computation---|---IO phase---|---computation---|
+        # basic assumption: |---computation---|---IO phase---|---computation---|---IO phase---|
         
         io_per_duration = round(duration * jobspec['io_frac'] / jobspec['io_cnt'])
         io_per_size  = round(jobspec['io_size'] / jobspec['io_cnt'])
@@ -867,8 +867,8 @@ class BGQsim(Simulator):
 #        print duration, jobspec['io_frac'], jobspec['io_cnt'], io_per_duration, comp_per_duration
         
         # job queued ----> running; insert io event
-        self.insert_time_stamp(start + comp_per_duration, "W", {'jobid':jobspec['jobid'], 
-                                                                'io_rest_cnt':jobspec['io_cnt']-1, 
+        self.insert_time_stamp(start + comp_per_duration, "P", {'jobid':jobspec['jobid'], 
+                                                                'io_rest_cnt':jobspec['io_cnt'], 
                                                                 'io_per_size':io_per_size,
                                                                 'io_per_duration':io_per_duration,
                                                                 'comp_per_duration':comp_per_duration
@@ -881,15 +881,27 @@ class BGQsim(Simulator):
     
         return updates
     
+    
+    ### update next event in case of computation or I/O events
     def update_job_next_event(self, type, jobspec):
         if type == "W":
             current_time = self.get_current_time_sec()
+            computation_time = jobspec['extra']['comp_per_duration']
+            jobid = jobspec['extra']['jobid']
             io_time = jobspec['extra']['io_per_duration'];
+            
+            self.log_job_event("W", self.get_current_time_date(), jobspec)
+            
+            if jobspec['extra']['io_rest_cnt'] == 0:
+                self.insert_time_stamp(current_time + computation_time, "E", {'jobid':jobid})
+                return
             
             jobid = jobspec['extra']['jobid']
             io_rest_cnt = jobspec['extra']['io_rest_cnt']
             io_per_size = jobspec['extra']['io_per_size']
             comp_per_duration = jobspec['extra']['comp_per_duration']
+            
+            
             
             self.insert_time_stamp(current_time + io_time, "P", {'jobid':jobid,
                                                                  'io_rest_cnt':io_rest_cnt,
@@ -898,19 +910,12 @@ class BGQsim(Simulator):
                                                                  'comp_per_duration':comp_per_duration
                                                                  })
             
-            self.log_job_event("W", self.get_current_time_date(), jobspec)
-            
         elif type == "P":
             current_time = self.get_current_time_sec()
-            computation_time = jobspec['extra']['comp_per_duration']
-            
+            computation_time = jobspec['extra']['comp_per_duration'] 
             jobid = jobspec['extra']['jobid']
             
             self.log_job_event("P", self.get_current_time_date(), jobspec)
-            
-            if jobspec['extra']['io_rest_cnt'] == 0:
-                self.insert_time_stamp(current_time + computation_time, "E", {'jobid':jobid})
-                return
                 
             io_time =jobspec['extra']['io_per_duration']
             io_rest_cnt = jobspec['extra']['io_rest_cnt'] - 1
@@ -923,7 +928,6 @@ class BGQsim(Simulator):
                                                                           'io_per_duration':io_time,
                                                                           'comp_per_duration':comp_per_duration 
                                                                  })
-            self.log_job_event("P", self.get_current_time_date(), jobspec)
             
 ##### system related   
     def init_partition(self, namelist):
