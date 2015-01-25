@@ -107,6 +107,9 @@ class BGQsim(Simulator):
         self.num_end = 0
         self.total_job = 0
         
+        # io jobs
+        self.io_jobs = {}
+        
 ####------Walltime prediction
         self.predict_scheme = kwargs.get("predict", False)
 
@@ -511,9 +514,9 @@ class BGQsim(Simulator):
             spec['start_time'] = tmp.get('start', 0)  #used for reservation jobs only
             
 ##-------------IO operations related
-            spec['io_cnt'] = 3
+            spec['io_cnt'] = 4
             spec['io_size'] = 100
-            spec['io_frac'] = 0.3 
+            spec['io_frac'] = 0.4
                         
             #add the job spec to the spec list            
             specs.append(spec)
@@ -598,6 +601,7 @@ class BGQsim(Simulator):
             if cur_event in ["Q", "E", "W", "P"]: ## new event, io---W, computation---P
                 #scheduling related events
                 self.update_job_states(cur_event_specs, {}, cur_event)
+                print self.get_current_time_date(), cur_event, self.io_jobs
             
             self.compute_utility_scores()
             
@@ -666,6 +670,10 @@ class BGQsim(Simulator):
                 
                 if completed_job == None:
                     continue
+                
+                # update io job list
+                if self.io_jobs.has_key(completed_job.jobid):
+                    del self.io_jobs[completed_job.jobid]
                 
                 #release partition
                 for partition in completed_job.location:
@@ -884,7 +892,7 @@ class BGQsim(Simulator):
     
     ### update next event in case of computation or I/O events
     def update_job_next_event(self, type, jobspec):
-        if type == "W":
+        if type == "W": # I/O event
             current_time = self.get_current_time_sec()
             computation_time = jobspec['extra']['comp_per_duration']
             jobid = jobspec['extra']['jobid']
@@ -892,16 +900,24 @@ class BGQsim(Simulator):
             
             self.log_job_event("W", self.get_current_time_date(), jobspec)
             
+            ## update jo job list
+            io_job = self.get_live_job_by_id(jobid)
+            
+            if io_job == None:
+                return
+            else:
+                self.io_jobs[jobid]=self.get_current_time_date()
+            
+            ## prepare following computation event
             if jobspec['extra']['io_rest_cnt'] == 0:
                 self.insert_time_stamp(current_time + computation_time, "E", {'jobid':jobid})
+                io_job.end_time = current_time + computation_time
                 return
             
             jobid = jobspec['extra']['jobid']
             io_rest_cnt = jobspec['extra']['io_rest_cnt']
             io_per_size = jobspec['extra']['io_per_size']
             comp_per_duration = jobspec['extra']['comp_per_duration']
-            
-            
             
             self.insert_time_stamp(current_time + io_time, "P", {'jobid':jobid,
                                                                  'io_rest_cnt':io_rest_cnt,
@@ -910,12 +926,21 @@ class BGQsim(Simulator):
                                                                  'comp_per_duration':comp_per_duration
                                                                  })
             
-        elif type == "P":
+        elif type == "P": # computation
             current_time = self.get_current_time_sec()
             computation_time = jobspec['extra']['comp_per_duration'] 
             jobid = jobspec['extra']['jobid']
             
             self.log_job_event("P", self.get_current_time_date(), jobspec)
+            
+            ## update jo job list
+            io_job = self.get_live_job_by_id(jobid)
+            
+            if io_job == None:
+                return
+            else:
+                if self.io_jobs.has_key(jobid):
+                    del self.io_jobs[jobid]
                 
             io_time =jobspec['extra']['io_per_duration']
             io_rest_cnt = jobspec['extra']['io_rest_cnt'] - 1
