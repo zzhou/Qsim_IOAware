@@ -172,6 +172,22 @@ class EventSimulator(Component):
         return pos
     add_event = exposed(add_event)
     
+    def del_event(self, pos, ev_spec):
+        ''' delete an event '''
+        jobid = ev_spec.get('jobid')
+        event_type = ev_spec.get('type')
+        if jobid == None or event_type == None:
+            print "Remove event error: no jobid or event type provided"
+            return -1
+
+        for i in range(pos, len(self.event_list)):
+            if (self.event_list[i].get['jobid'] == jobid
+                and self.event_list[i].get['type'] == event_type):
+                del self.event_list[i]
+                break
+
+        return i
+    
     def get_time_span(self):
         '''return the whole time span'''
         starttime = self.event_list[1].get('unixtime')
