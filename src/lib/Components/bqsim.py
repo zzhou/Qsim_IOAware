@@ -109,6 +109,7 @@ class BGQsim(Simulator):
         
         # io jobs
         self.io_jobs = {}
+        self.suspend_io_jobs = {}
         
 ####------Walltime prediction
         self.predict_scheme = kwargs.get("predict", False)
@@ -514,7 +515,7 @@ class BGQsim(Simulator):
             spec['start_time'] = tmp.get('start', 0)  #used for reservation jobs only
             
 ##-------------IO operations related
-            spec['io_cnt'] = 4
+            spec['io_cnt'] = 1
             spec['io_size'] = 100
             spec['io_frac'] = 0.4
                         
@@ -870,12 +871,12 @@ class BGQsim(Simulator):
         
         io_per_duration = round(duration * jobspec['io_frac'] / jobspec['io_cnt'])
         io_per_size  = round(jobspec['io_size'] / jobspec['io_cnt'])
-        comp_per_duration = round(duration * (1-jobspec['io_frac']) / (jobspec['io_cnt']+1)) 
+        comp_per_duration = round(duration * (1-jobspec['io_frac']) / (jobspec['io_cnt'])) 
         
 #        print duration, jobspec['io_frac'], jobspec['io_cnt'], io_per_duration, comp_per_duration
         
         # job queued ----> running; insert io event
-        self.insert_time_stamp(start + comp_per_duration, "P", {'jobid':jobspec['jobid'], 
+        self.insert_time_stamp(start, "P", {'jobid':jobspec['jobid'], 
                                                                 'io_rest_cnt':jobspec['io_cnt'], 
                                                                 'io_per_size':io_per_size,
                                                                 'io_per_duration':io_per_duration,
@@ -894,7 +895,7 @@ class BGQsim(Simulator):
     def update_job_next_event(self, type, jobspec):
         if type == "W": # I/O event
             current_time = self.get_current_time_sec()
-            computation_time = jobspec['extra']['comp_per_duration']
+            io_time = jobspec['extra']['io_per_duration']
             jobid = jobspec['extra']['jobid']
             io_time = jobspec['extra']['io_per_duration'];
             
@@ -910,8 +911,8 @@ class BGQsim(Simulator):
             
             ## prepare following computation event
             if jobspec['extra']['io_rest_cnt'] == 0:
-                self.insert_time_stamp(current_time + computation_time, "E", {'jobid':jobid})
-                io_job.end_time = current_time + computation_time
+                self.insert_time_stamp(current_time + io_time, "E", {'jobid':jobid})
+                io_job.end_time = current_time + io_time
                 return
             
             jobid = jobspec['extra']['jobid']
@@ -942,7 +943,7 @@ class BGQsim(Simulator):
                 if self.io_jobs.has_key(jobid):
                     del self.io_jobs[jobid]
                 
-            io_time =jobspec['extra']['io_per_duration']
+            io_time =jobspec['extra']['io_per_duration'] # to be replaced by io-contention model
             io_rest_cnt = jobspec['extra']['io_rest_cnt'] - 1
             io_per_size = jobspec['extra']['io_per_size']
             comp_per_duration = jobspec['extra']['comp_per_duration']
