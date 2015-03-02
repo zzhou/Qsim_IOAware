@@ -46,8 +46,14 @@ YIELD_THRESHOLD = 0
 BESTFIT_BACKFILL = False
 SJF_BACKFILL = True
 
+
+# I/O-Aware scheduling policy
+##FCFS, FAIRSHARE
+SCHED_POLICY = "FCFS"
+
 # bandwidth
-IO_BANDWITH = 10
+IO_BANDWIDTH = 10240
+MAX_BANDWIDTH_PER_NODE = 1
     
 class BGQsim(Simulator):
     '''Cobalt Queue Simulator for Blue Gene systems'''
@@ -107,9 +113,17 @@ class BGQsim(Simulator):
         self.num_end = 0
         self.total_job = 0
         
-        # io jobs
-        self.io_jobs = {}
+        # io-related stuff
+        self.io_jobs = {} # job list including continue and suspended jobs
+        self.continue_io_jobs = {}
+        self.num_io_jobs = 0
+        self.num_io_nodes = 0
         self.suspend_io_jobs = {}
+        self.io_contention = False
+        
+        self.last_update_time = 0
+        print "scheduling policy:", SCHED_POLICY
+        
         
 ####------Walltime prediction
         self.predict_scheme = kwargs.get("predict", False)
@@ -515,9 +529,13 @@ class BGQsim(Simulator):
             spec['start_time'] = tmp.get('start', 0)  #used for reservation jobs only
             
 ##-------------IO operations related
-            spec['io_cnt'] = 1
-            spec['io_size'] = 100
+            runtime = float(spec['runtime'])
+            nodes = int(spec['nodes'])
+            spec['io_cnt'] = int(runtime / 1800)            
             spec['io_frac'] = 0.4
+            spec['io_size'] = MAX_BANDWIDTH_PER_NODE * nodes * (runtime * spec['io_frac'])
+            
+#            print spec['io_cnt'], spec['io_frac'], spec['io_size']
                         
             #add the job spec to the spec list            
             specs.append(spec)
@@ -602,7 +620,11 @@ class BGQsim(Simulator):
             if cur_event in ["Q", "E", "W", "P"]: ## new event, io---W, computation---P
                 #scheduling related events
                 self.update_job_states(cur_event_specs, {}, cur_event)
-                print self.get_current_time_date(), cur_event, self.io_jobs
+                           
+#                if cur_event == "E":
+#                    self.update_io_end()
+#                print cur_event_specs['datetime'], cur_event_specs['jobid'], cur_event, self.continue_io_jobs.keys()
+#                print ""
             
             self.compute_utility_scores()
             
@@ -672,10 +694,6 @@ class BGQsim(Simulator):
                 if completed_job == None:
                     continue
                 
-                # update io job list
-                if self.io_jobs.has_key(completed_job.jobid):
-                    del self.io_jobs[completed_job.jobid]
-                
                 #release partition
                 for partition in completed_job.location:
                     self.release_partition(partition)
@@ -697,6 +715,24 @@ class BGQsim(Simulator):
                 self.queues.del_jobs([{'jobid':int(Id)}])
                 self.num_running -= 1
                 self.num_end += 1
+                
+                #  update past io
+                self.update_job_io()
+                
+                # remove current job from io_jobs and continue_jobs
+                jobid = jobspec['jobid']
+
+                if jobid in self.continue_io_jobs:
+                    del self.continue_io_jobs[jobid]
+                                    
+                if jobid in self.io_jobs:
+                    del self.io_jobs[jobid]
+                    
+                # schedule io
+                self.schedule_io_jobs()
+#                                
+                # update io end
+                self.update_io_end()                
         
         if not self.cluster_job_trace and not self.batch:
             os.system('clear')
@@ -868,10 +904,19 @@ class BGQsim(Simulator):
         
         # calculate each io&computation duration
         # basic assumption: |---computation---|---IO phase---|---computation---|---IO phase---|
+        io_per_duration = 0
+        io_per_size = 0
+        comp_per_duration = duration
+        nodes = jobspec['nodes']
         
-        io_per_duration = round(duration * jobspec['io_frac'] / jobspec['io_cnt'])
-        io_per_size  = round(jobspec['io_size'] / jobspec['io_cnt'])
-        comp_per_duration = round(duration * (1-jobspec['io_frac']) / (jobspec['io_cnt'])) 
+        if jobspec['io_cnt'] == 0:
+            io_per_duration = 0
+            io_per_size = 0
+            comp_per_duration = duration
+        else:
+            io_per_duration = round(duration * jobspec['io_frac'] / jobspec['io_cnt'])
+            io_per_size  = round(jobspec['io_size'] / jobspec['io_cnt'])
+            comp_per_duration = round(duration * (1-jobspec['io_frac']) / (jobspec['io_cnt'])) 
         
 #        print duration, jobspec['io_frac'], jobspec['io_cnt'], io_per_duration, comp_per_duration
         
@@ -880,7 +925,8 @@ class BGQsim(Simulator):
                                                                 'io_rest_cnt':jobspec['io_cnt'], 
                                                                 'io_per_size':io_per_size,
                                                                 'io_per_duration':io_per_duration,
-                                                                'comp_per_duration':comp_per_duration
+                                                                'comp_per_duration':comp_per_duration,
+                                                                'nodes':nodes
                                                                 })
         
         # insert job end event
@@ -891,41 +937,268 @@ class BGQsim(Simulator):
         return updates
     
     
+    # check io contention
+    def check_io_contention(self):
+        num_io_node = 0
+        
+        for job_id in self.continue_io_jobs:
+            num_io_node += int(self.continue_io_jobs[job_id]['nodes'])
+            
+        if num_io_node >= 10240: # 1/4 whole machine
+            return True
+        else:
+            return False
+            
+    
+    ### update io_job or suspend_io_job
+    def update_job_io(self):
+        current_bandwidth_per_node = MAX_BANDWIDTH_PER_NODE
+        current_time = self.get_current_time_sec()
+        
+        # adjust bandwidth if io contention
+        if self.check_io_contention():
+            num_io_node = 0
+            for job_id in self.continue_io_jobs:
+                num_io_node += int(self.continue_io_jobs[job_id]['nodes'])
+            current_bandwidth_per_node = float(IO_BANDWIDTH) / float(num_io_node) 
+            
+        for job_id in self.continue_io_jobs:
+            job_specs = self.continue_io_jobs[job_id]
+            data_size = job_specs['io_size']
+            num_nodes = int(job_specs['nodes'])
+        
+            # update data transferred
+            io_time_elapsed = current_time - self.last_update_time
+#            print "elapsed io time", job_id, sec_to_date(current_time), sec_to_date(self.last_update_time)
+#            print data_size, num_nodes, current_bandwidth_per_node, io_time_elapsed
+#            print job_id, data_size, current_bandwidth_per_node, io_time_elapsed
+            self.continue_io_jobs[job_id]['io_size'] = data_size - (num_nodes * current_bandwidth_per_node * io_time_elapsed)
+        
+        self.last_update_time = self.get_current_time()
+            
+        return        
+
+
+    def io_start_cmp(self, job1, job2):
+        return cmp(job1['cur_io_starttime'], job2['cur_io_starttime'])
+    
+    ### io-aware job scheduling
+    def schedule_io_jobs(self):
+        
+#        for job_id in self.io_jobs:
+#            print self.io_jobs[job_id]
+#        print "$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$"
+#        for job_id in self.continue_io_jobs:
+#            print self.continue_io_jobs[job_id]
+#        print ""
+#        print ""
+               
+        self.continue_io_jobs = {}
+        self.suspend_io_jobs = {}      
+    
+        # sort io jobs
+        self.io_job_list = []
+        for key, value in self.io_jobs.iteritems():
+            item = {}
+            item['jobid'] = key
+            item['io_size'] = value['io_size']
+            item['nodes'] = value['nodes']
+            item['extra'] = value['extra']
+            item['cur_io_starttime'] = value['cur_io_starttime']
+            
+            self.io_job_list.append(item)
+            
+        self.io_job_list.sort(self.io_start_cmp)    
+        
+        if SCHED_POLICY == "FCFS": # based on the I/O start time
+            # sort io jobs
+            self.io_job_list = []
+            for key, value in self.io_jobs.iteritems():
+                item = {}
+                item['jobid'] = key
+                item['io_size'] = value['io_size']
+                item['nodes'] = value['nodes']
+                item['extra'] = value['extra']
+                item['cur_io_starttime'] = value['cur_io_starttime']
+            
+                self.io_job_list.append(item)
+            
+            self.io_job_list.sort(self.io_start_cmp)  
+            total_io_nodes = 0
+            
+            for job_item in self.io_job_list:
+                job_id = job_item['jobid']
+                nodes = int(self.io_jobs[job_id]['nodes'])
+                
+                if total_io_nodes + nodes <= 10240:                
+                    self.continue_io_jobs[job_id] = self.io_jobs[job_id]
+                    total_io_nodes += nodes
+                else:
+                    self.suspend_io_jobs[job_id] = self.io_jobs[job_id]
+          
+        if SCHED_POLICY == "FAIRSHARE": # all I/O share the bandwidth
+            for job_id in self.io_jobs:
+                self.continue_io_jobs[job_id] = self.io_jobs[job_id]
+            
+#            if not self.check_io_contention():
+#                self.continue_io_jobs[job_id] = self.io_jobs[job_id]
+#            else:
+#                self.suspend_io_jobs[job_id] = self.io_jobs[job_id]
+                
+#        print "continue job list:", self.continue_io_jobs.keys()
+#        print "suspend job list:", self.suspend_io_jobs.keys()
+                            
+#        if self.check_io_contention():
+#            pass
+#        else:
+#            for jobid in self.io_jobs:
+#                self.continue_io_jobs[jobid] = self.io_jobs[jobid]
+            
+    
+    ### update io end time 
+    def update_io_end(self):
+        
+        # delete end event of suspend jobs
+        for job_id in self.suspend_io_jobs:
+            pos = self.event_manager.get_current_time_stamp()
+            job_specs = self.suspend_io_jobs[job_id]
+            event_specs = {}
+            event_specs['jobid'] = job_id
+            
+            rest_io_cnt = job_specs['extra']['extra']['io_rest_cnt']
+            
+            if rest_io_cnt == 0: # last io call
+                event_specs['type'] = 'E'
+            else: # next event is computation
+                event_specs['type'] = 'P'
+                
+            self.event_manager.del_event(pos, event_specs)
+        
+        # update end event of continue io jobs
+        current_bandwidth_per_node = MAX_BANDWIDTH_PER_NODE
+        current_time = self.get_current_time_sec()
+        
+        # adjust io bandwidth
+        if self.check_io_contention():
+            num_io_node = 0
+            
+            for job_id in self.continue_io_jobs:
+                num_io_node += int(self.continue_io_jobs[job_id]['nodes'])
+                 
+            current_bandwidth_per_node = float(IO_BANDWIDTH) / float(num_io_node)
+        
+        for job_id in self.continue_io_jobs:
+            job_specs = self.continue_io_jobs[job_id]
+            data_size = job_specs['io_size']
+            num_nodes = int(job_specs['nodes'])
+            rest_io_cnt = job_specs['extra']['extra']['io_rest_cnt']
+            
+            io_time_required = data_size / (current_bandwidth_per_node * num_nodes)
+            
+            if rest_io_cnt == 0: # last io call
+                pos = self.event_manager.get_current_time_stamp()
+                event_specs = {}
+                event_specs['jobid'] = job_id
+                event_specs['type'] = "E"
+                
+                # delete event
+                self.event_manager.del_event(pos, event_specs)
+                
+                io_job = self.get_live_job_by_id(job_id)
+                
+                if io_job == None:
+                    pass
+                else:
+                    io_job.end_time = current_time + io_time_required
+                    self.insert_time_stamp(current_time + io_time_required, "E", {'jobid':job_id})
+#                    print job_id, data_size, sec_to_date(current_time), io_time_required, sec_to_date(io_job.end_time)
+#                    print job_id, io_time_required
+#                    print "$$$$$$$$$$$$$$$$$$$$$$$", job_id, sec_to_date(current_time), "%%%%%%", sec_to_date(current_time+io_time_required)
+#                    self.event_manager.print_all_events()
+                    
+            else: # insert next computation
+                pos = self.event_manager.get_current_time_stamp()
+                event_specs = {}
+                event_specs['jobid'] = job_id
+                event_specs['type'] = "P"
+
+                # delete event                
+                self.event_manager.del_event(pos, event_specs)
+
+                # retrieve job specs and delete it
+                jobspec = self.io_jobs[job_id]['extra']
+                
+                io_rest_cnt = jobspec['extra']['io_rest_cnt']
+                io_per_size = jobspec['extra']['io_per_size']
+                io_time = jobspec['extra']['io_per_duration'];
+                comp_per_duration = jobspec['extra']['comp_per_duration']
+                nodes = jobspec['extra']['nodes']
+                
+                self.insert_time_stamp(current_time + io_time_required, "P", {'jobid':job_id,
+                                                                              'io_rest_cnt':io_rest_cnt,
+                                                                              'io_per_size':io_per_size,
+                                                                              'io_per_duration':io_time,
+                                                                              'comp_per_duration':comp_per_duration,
+                                                                              'nodes':nodes
+                                                                              })
+                
     ### update next event in case of computation or I/O events
-    def update_job_next_event(self, type, jobspec):
-        if type == "W": # I/O event
-            current_time = self.get_current_time_sec()
-            io_time = jobspec['extra']['io_per_duration']
+    def update_job_next_event(self, type, jobspec):            
+        if type == "W": # an I/O starts
+            
+            # add jobs to io_job list
             jobid = jobspec['extra']['jobid']
-            io_time = jobspec['extra']['io_per_duration'];
+            nodes = jobspec['extra']['nodes']
+            io_size = jobspec['extra']['io_per_size']
+            io_rest_cnt = jobspec['extra']['io_rest_cnt']
+            comp_per_duration = jobspec['extra']['comp_per_duration']
+                        
+            # add job to io_jobs
+            self.io_jobs[jobid] = {}
+            self.io_jobs[jobid]['io_size'] = io_size
+            self.io_jobs[jobid]['nodes'] = nodes
+            self.io_jobs[jobid]['extra'] = jobspec
+            self.io_jobs[jobid]['cur_io_starttime'] = self.get_current_time_sec() # current io start time, for priority
+            
+#            current_time = self.get_current_time_sec()
+#            io_time = jobspec['extra']['io_per_duration']
+#            jobid = jobspec['extra']['jobid']
+#            io_time = jobspec['extra']['io_per_duration'];
             
             self.log_job_event("W", self.get_current_time_date(), jobspec)
             
-            ## update jo job list
-            io_job = self.get_live_job_by_id(jobid)
+            # update job doing io
+            self.update_job_io()
             
-            if io_job == None:
-                return
-            else:
-                self.io_jobs[jobid]=self.get_current_time_date()
+            # select subset of jobs to do io
+            self.schedule_io_jobs()
             
-            ## prepare following computation event
-            if jobspec['extra']['io_rest_cnt'] == 0:
-                self.insert_time_stamp(current_time + io_time, "E", {'jobid':jobid})
-                io_job.end_time = current_time + io_time
-                return
+            # adjust io end time
+            self.update_io_end()
             
-            jobid = jobspec['extra']['jobid']
-            io_rest_cnt = jobspec['extra']['io_rest_cnt']
-            io_per_size = jobspec['extra']['io_per_size']
-            comp_per_duration = jobspec['extra']['comp_per_duration']
-            
-            self.insert_time_stamp(current_time + io_time, "P", {'jobid':jobid,
-                                                                 'io_rest_cnt':io_rest_cnt,
-                                                                 'io_per_size':io_per_size,
-                                                                 'io_per_duration':io_time,
-                                                                 'comp_per_duration':comp_per_duration
-                                                                 })
+#            # update io job list
+#            io_job = self.get_live_job_by_id(jobid)
+#            
+#            if io_job == None:
+#                return
+#            
+#            ## prepare following computation event
+#            if jobspec['extra']['io_rest_cnt'] == 0:
+#                self.insert_time_stamp(current_time + io_time, "E", {'jobid':jobid})
+#                io_job.end_time = current_time + io_time
+#                return
+#            
+#            jobid = jobspec['extra']['jobid']
+#            io_rest_cnt = jobspec['extra']['io_rest_cnt']
+#            io_per_size = jobspec['extra']['io_per_size']
+#            comp_per_duration = jobspec['extra']['comp_per_duration']
+#            
+#            self.insert_time_stamp(current_time + io_time, "P", {'jobid':jobid,
+#                                                                 'io_rest_cnt':io_rest_cnt,
+#                                                                 'io_per_size':io_per_size,
+#                                                                 'io_per_duration':io_time,
+#                                                                 'comp_per_duration':comp_per_duration
+#                                                                 })
             
         elif type == "P": # computation
             current_time = self.get_current_time_sec()
@@ -934,25 +1207,44 @@ class BGQsim(Simulator):
             
             self.log_job_event("P", self.get_current_time_date(), jobspec)
             
+            ## update io jobs   
+            self.update_job_io()
+         
             ## update jo job list
             io_job = self.get_live_job_by_id(jobid)
             
             if io_job == None:
                 return
             else:
-                if self.io_jobs.has_key(jobid):
+                if jobid in self.continue_io_jobs:
+                    del self.continue_io_jobs[jobid]
+                    
+                if jobid in self.io_jobs:
                     del self.io_jobs[jobid]
-                
+                            
+            ## schedule jobs
+            self.schedule_io_jobs()
+
+            # insert end if no io following this computation            
+            if jobspec['extra']['io_rest_cnt'] == 0:
+                self.insert_time_stamp(current_time + computation_time, "E", {'jobid':jobid})
+                return
+
+            ## updata io end
+            self.update_io_end()
+                 
             io_time =jobspec['extra']['io_per_duration'] # to be replaced by io-contention model
             io_rest_cnt = jobspec['extra']['io_rest_cnt'] - 1
             io_per_size = jobspec['extra']['io_per_size']
             comp_per_duration = jobspec['extra']['comp_per_duration']
+            nodes = jobspec['extra']['nodes']
             
             self.insert_time_stamp(current_time + computation_time, "W", {'jobid':jobid,
                                                                           'io_rest_cnt':io_rest_cnt,
                                                                           'io_per_size':io_per_size,
                                                                           'io_per_duration':io_time,
-                                                                          'comp_per_duration':comp_per_duration 
+                                                                          'comp_per_duration':comp_per_duration,
+                                                                          'nodes':nodes 
                                                                  })
             
 ##### system related   
@@ -1321,7 +1613,7 @@ class BGQsim(Simulator):
             self.logger.error("Problem executing utility function definitions.", exc_info=True)
             
         for thing in locals.values():
-            if type(thing) is types.FunctionType:
+            if type(thing) is type.FunctionType:
                 if thing.func_name in self.builtin_utility_functions:
                     self.logger.error("Attempting to overwrite builtin utility function '%s'.  User version discarded." % \
                         thing.func_name)

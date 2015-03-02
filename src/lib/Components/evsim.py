@@ -176,18 +176,38 @@ class EventSimulator(Component):
         ''' delete an event '''
         jobid = ev_spec.get('jobid')
         event_type = ev_spec.get('type')
+                        
         if jobid == None or event_type == None:
             print "Remove event error: no jobid or event type provided"
             return -1
 
-        for i in range(pos, len(self.event_list)):
-            if (self.event_list[i].get['jobid'] == jobid
-                and self.event_list[i].get['type'] == event_type):
+        for i in range(pos+1, len(self.event_list)):
+            if (self.event_list[i].get('jobid') == jobid
+                and self.event_list[i].get('type') == event_type):
                 del self.event_list[i]
-                break
+                return i
 
-        return i
+        return None
+    del_event = exposed(del_event)
     
+    
+    def get_event_spec(self, pos, ev_spec):
+        # get a certain event specs from the pos
+        jobid = ev_spec.get('jobid')
+        event_type = ev_spec.get('type')
+        
+        if jobid == None or event_type == None:
+            print "Get event spec error: no jobid or event type provided"
+        
+        for i in range(pos+1, len(self.event_list)):
+            if (self.event_list[i].get('jobid') == jobid 
+                and self.event_list[i].get('type') == event_type):
+                return self.event_list[i]
+        
+        return None
+    get_event_spec = exposed(get_event_spec)
+    
+        
     def get_time_span(self):
         '''return the whole time span'''
         starttime = self.event_list[1].get('unixtime')
@@ -314,6 +334,14 @@ class EventSimulator(Component):
             i += 1
             if i == 25:
                 break
+            
+    # use with caution, list may be extremely long
+    def print_all_events(self):
+        print "total events:", len(self.event_list) 
+        for event in self.event_list:
+            if 'datetime' in event:
+                print "        -------------------", event['datetime'], event['type'], event['jobid']
+    print_all_events = exposed(print_all_events)
     
     def event_driver(self):
         """core part that drives the clock"""
