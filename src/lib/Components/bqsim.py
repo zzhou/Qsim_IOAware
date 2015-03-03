@@ -1019,13 +1019,12 @@ class BGQsim(Simulator):
                 item['io_size'] = value['io_size']
                 item['nodes'] = value['nodes']
                 item['extra'] = value['extra']
-                item['cur_io_starttime'] = value['cur_io_starttime']
-            
+                item['cur_io_starttime'] = value['cur_io_starttime']          
                 self.io_job_list.append(item)
             
             self.io_job_list.sort(self.io_start_cmp)  
+           
             total_io_nodes = 0
-            
             for job_item in self.io_job_list:
                 job_id = job_item['jobid']
                 nodes = int(self.io_jobs[job_id]['nodes'])
@@ -1035,6 +1034,11 @@ class BGQsim(Simulator):
                     total_io_nodes += nodes
                 else:
                     self.suspend_io_jobs[job_id] = self.io_jobs[job_id]
+                
+            if len(self.continue_io_jobs)==0 and len(self.io_job_list)!=0:
+                job_id = self.io_job_list[0]['jobid']
+                self.continue_io_jobs[job_id] = self.io_jobs[job_id] 
+                
           
         if SCHED_POLICY == "FAIRSHARE": # all I/O share the bandwidth
             for job_id in self.io_jobs:
