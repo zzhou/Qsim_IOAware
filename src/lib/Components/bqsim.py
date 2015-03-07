@@ -28,7 +28,6 @@ import time
 
 
 
-
 REMOTE_QUEUE_MANAGER = "cluster-queue-manager"
 
 WALLTIME_AWARE_CONS = False
@@ -47,13 +46,12 @@ BESTFIT_BACKFILL = False
 SJF_BACKFILL = True
 
 
-# I/O-Aware scheduling policy
-##FCFS, FAIRSHARE
-SCHED_POLICY = "FCFS"
-
 # bandwidth
 IO_BANDWIDTH = 10240
 MAX_BANDWIDTH_PER_NODE = 1
+
+# ratio of io network to storage system
+IO_BOTTLENECK_RATIO = 4
     
 class BGQsim(Simulator):
     '''Cobalt Queue Simulator for Blue Gene systems'''
@@ -75,6 +73,9 @@ class BGQsim(Simulator):
         self.sim_end = kwargs.get("bg_trace_end", sys.maxint)
         self.anchor = kwargs.get("Anchor", 0)
         self.backfill = kwargs.get("backfill", "ff")
+        
+        # io-aware scheduling policy
+        self.SCHED_POLICY = kwargs.get("policy", "FAIRSHARE")
         
 ###--------Partition related
         partnames = self._partitions.keys()
@@ -122,7 +123,7 @@ class BGQsim(Simulator):
         self.io_contention = False
         
         self.last_update_time = 0
-        print "scheduling policy:", SCHED_POLICY
+        print "scheduling policy:", self.SCHED_POLICY
         
         
 ####------Walltime prediction
@@ -287,7 +288,7 @@ class BGQsim(Simulator):
         evspec['location'] = info.get('location', [])
         
         evspec['extra'] = info
-                   
+        
         self.event_manager.add_event(evspec)
         
     def log_job_event(self, eventtype, timestamp, spec):
@@ -612,7 +613,7 @@ class BGQsim(Simulator):
             
             # retrieve event specs
             cur_event_specs = self.event_manager.get_current_event_spec()
-            
+                       
             if cur_event == "S":
                 #start reserved job at this time point
                 self.run_reserved_jobs()
@@ -620,11 +621,8 @@ class BGQsim(Simulator):
             if cur_event in ["Q", "E", "W", "P"]: ## new event, io---W, computation---P
                 #scheduling related events
                 self.update_job_states(cur_event_specs, {}, cur_event)
-                           
-#                if cur_event == "E":
-#                    self.update_io_end()
 #                print cur_event_specs['datetime'], cur_event_specs['jobid'], cur_event, self.continue_io_jobs.keys()
-#                print ""
+
             
             self.compute_utility_scores()
             
@@ -685,7 +683,6 @@ class BGQsim(Simulator):
             
             elif cur_event == "W" or cur_event == "P": # handle IO events
 #                print "time stamp:", self.event_manager.get_current_time_stamp()
-                    
                 self.update_job_next_event(cur_event, specs)
                 
             elif cur_event=="E":  # Job (Id) is completed
@@ -921,12 +918,14 @@ class BGQsim(Simulator):
 #        print duration, jobspec['io_frac'], jobspec['io_cnt'], io_per_duration, comp_per_duration
         
         # job queued ----> running; insert io event
-        self.insert_time_stamp(start, "P", {'jobid':jobspec['jobid'], 
+        self.insert_time_stamp(start, "P", {'jobid':jobspec['jobid'],
+                                                                'total_io_cnt':jobspec['io_cnt'],
                                                                 'io_rest_cnt':jobspec['io_cnt'], 
                                                                 'io_per_size':io_per_size,
                                                                 'io_per_duration':io_per_duration,
                                                                 'comp_per_duration':comp_per_duration,
-                                                                'nodes':nodes
+                                                                'nodes':nodes,
+                                                                'job_starttime':self.get_current_time_sec()
                                                                 })
         
         # insert job end event
@@ -944,7 +943,7 @@ class BGQsim(Simulator):
         for job_id in self.continue_io_jobs:
             num_io_node += int(self.continue_io_jobs[job_id]['nodes'])
             
-        if num_io_node >= 10240: # 1/4 whole machine
+        if num_io_node >= (TOTAL_NODES / IO_BOTTLENECK_RATIO): # 1/4 whole machine
             return True
         else:
             return False
@@ -974,13 +973,57 @@ class BGQsim(Simulator):
 #            print job_id, data_size, current_bandwidth_per_node, io_time_elapsed
             self.continue_io_jobs[job_id]['io_size'] = data_size - (num_nodes * current_bandwidth_per_node * io_time_elapsed)
         
-        self.last_update_time = self.get_current_time()
-            
+        self.last_update_time = self.get_current_time_sec()   
         return        
+
 
 
     def io_start_cmp(self, job1, job2):
         return cmp(job1['cur_io_starttime'], job2['cur_io_starttime'])
+    
+    
+    
+    
+    def get_inst_slowdown(self, job):
+        current_time = self.get_current_time_sec()
+        io_duration = current_time - job['cur_io_starttime']
+        
+        if io_duration == 0:
+            return 0
+        
+        nodes = job['nodes']
+        data_transferred = job['total_size'] - job['io_size']
+        
+        inst_slowdown = 1 - data_transferred / (float(MAX_BANDWIDTH_PER_NODE) * float(nodes) * float(io_duration))
+        return inst_slowdown
+    
+    
+    
+    def get_aggr_slowdown(self, job):
+        current_time = self.get_current_time_sec()
+        
+        total_io_cnt = job['extra']['extra']['total_io_cnt']
+        io_rest_cnt = job['extra']['extra']['io_rest_cnt']
+        io_per_size = job['extra']['extra']['io_per_size']
+        io_time = job['extra']['extra']['io_per_duration']
+        comp_per_duration = job['extra']['extra']['comp_per_duration']
+        nodes = job['extra']['extra']['nodes']
+        job_starttime = job['extra']['extra']['job_starttime']
+        
+        aggr_slowdown = (current_time - job_starttime) / ((io_time + comp_per_duration)*(total_io_cnt - io_rest_cnt + 1))
+        return aggr_slowdown   
+    
+    
+            
+    def instant_slowdown_cmp(self, job1, job2): 
+        return -cmp(self.get_inst_slowdown(job1), self.get_inst_slowdown(job2))
+    
+    
+    
+    def aggregate_slowdown_cmp(self, job1, job2):      
+        return -cmp(self.get_aggr_slowdown(job1), self.get_aggr_slowdown(job2))
+    
+    
     
     ### io-aware job scheduling
     def schedule_io_jobs(self):
@@ -995,22 +1038,114 @@ class BGQsim(Simulator):
                
         self.continue_io_jobs = {}
         self.suspend_io_jobs = {}      
-    
-        # sort io jobs
-        self.io_job_list = []
-        for key, value in self.io_jobs.iteritems():
-            item = {}
-            item['jobid'] = key
-            item['io_size'] = value['io_size']
-            item['nodes'] = value['nodes']
-            item['extra'] = value['extra']
-            item['cur_io_starttime'] = value['cur_io_starttime']
-            
-            self.io_job_list.append(item)
-            
-        self.io_job_list.sort(self.io_start_cmp)    
         
-        if SCHED_POLICY == "FCFS": # based on the I/O start time
+        if not self.SCHED_POLICY in ['FCFS', 
+                                     'FAIRSHARE', 
+                                     'ADAPTIVE', 
+                                     'MAXUTIL', 
+                                     'MININSTSLD', 
+                                     'MINAGGRSLD']:
+            print "No scheduling policy specified !!"
+            os._exit(0)
+        
+        
+        if self.SCHED_POLICY == "MINAGGRSLD":
+            # sort io jobs
+            self.io_job_list = []
+            for key, value in self.io_jobs.iteritems():
+                item = {}
+                item['jobid'] = key
+                item['io_size'] = value['io_size']
+                item['nodes'] = value['nodes']
+                item['total_size'] = value['total_size']
+                item['extra'] = value['extra']
+                item['cur_io_starttime'] = value['cur_io_starttime']          
+                self.io_job_list.append(item)
+            
+            self.io_job_list.sort(self.aggregate_slowdown_cmp)
+            
+            total_io_nodes = 0
+            for job_item in self.io_job_list:
+                job_id = job_item['jobid']
+                nodes = int(self.io_jobs[job_id]['nodes'])
+                
+                if total_io_nodes <= (TOTAL_NODES / IO_BOTTLENECK_RATIO):
+                    self.continue_io_jobs[job_id] = self.io_jobs[job_id]
+                    total_io_nodes += nodes
+                else:
+                    self.suspend_io_jobs[job_id] = self.io_jobs[job_id]
+                
+#                if (total_io_nodes + nodes) <= (TOTAL_NODES / IO_BOTTLENECK_RATIO):                
+#                    self.continue_io_jobs[job_id] = self.io_jobs[job_id]
+#                    total_io_nodes += nodes
+##                if total_io_nodes <= (TOTAL_NODES / IO_BOTTLENECK_RATIO):
+##                    self.continue_io_jobs[job_id] = self.io_jobs[job_id]
+##                    total_io_nodes += nodes
+#                else:
+#                    self.suspend_io_jobs[job_id] = self.io_jobs[job_id]
+                
+            if len(self.continue_io_jobs)==0 and len(self.io_job_list)!=0:
+                job_id = self.io_job_list[0]['jobid']
+                self.continue_io_jobs[job_id] = self.io_jobs[job_id] 
+                
+                
+            
+        if self.SCHED_POLICY == "MININSTSLD":
+            # sort io jobs
+            self.io_job_list = []
+            for key, value in self.io_jobs.iteritems():
+                item = {}
+                item['jobid'] = key
+                item['io_size'] = value['io_size']
+                item['nodes'] = value['nodes']
+                item['total_size'] = value['total_size']
+                item['extra'] = value['extra']
+                item['cur_io_starttime'] = value['cur_io_starttime']          
+                self.io_job_list.append(item)
+            
+            self.io_job_list.sort(self.instant_slowdown_cmp)
+            
+            total_io_nodes = 0
+            for job_item in self.io_job_list:
+                job_id = job_item['jobid']
+                nodes = int(self.io_jobs[job_id]['nodes'])
+                
+                if total_io_nodes <= (TOTAL_NODES / IO_BOTTLENECK_RATIO):
+                    self.continue_io_jobs[job_id] = self.io_jobs[job_id]
+                    total_io_nodes += nodes
+                else:
+                    self.suspend_io_jobs[job_id] = self.io_jobs[job_id]
+                
+#                if (total_io_nodes + nodes) <= (TOTAL_NODES / IO_BOTTLENECK_RATIO):                
+#                    self.continue_io_jobs[job_id] = self.io_jobs[job_id]
+#                    total_io_nodes += nodes
+##                if total_io_nodes <= (TOTAL_NODES / IO_BOTTLENECK_RATIO):
+##                    self.continue_io_jobs[job_id] = self.io_jobs[job_id]
+##                    total_io_nodes += nodesM
+#                else:
+#                    self.suspend_io_jobs[job_id] = self.io_jobs[job_id]
+                
+            if len(self.continue_io_jobs)==0 and len(self.io_job_list)!=0:
+                job_id = self.io_job_list[0]['jobid']
+                self.continue_io_jobs[job_id] = self.io_jobs[job_id]                     
+                
+        if self.SCHED_POLICY == "MAXUTIL":
+            
+            total_nodes = 0
+            
+            for job_id in self.io_jobs:
+                total_nodes += int(self.io_jobs[job_id]['nodes'])
+                
+#            if total_nodes >= TOTAL_NODES / IO_BOTTLENECK_RATIO:
+#                print self.io_jobs.keys()
+#                print self.get_current_time_date(), True
+            
+            cont_jobs, susp_jobs = self.find_optimal_solu_DP(IO_BANDWIDTH, self.io_jobs)
+            
+            for job_id in cont_jobs:
+                self.continue_io_jobs[job_id] = self.io_jobs[job_id]        
+        
+        if self.SCHED_POLICY == "ADAPTIVE":
             # sort io jobs
             self.io_job_list = []
             for key, value in self.io_jobs.iteritems():
@@ -1029,9 +1164,45 @@ class BGQsim(Simulator):
                 job_id = job_item['jobid']
                 nodes = int(self.io_jobs[job_id]['nodes'])
                 
-                if total_io_nodes + nodes <= 10240:                
+#                if total_io_nodes + nodes <= 10240:                
+#                    self.continue_io_jobs[job_id] = self.io_jobs[job_id]
+#                    total_io_nodes += nodes
+                if total_io_nodes <= (TOTAL_NODES / IO_BOTTLENECK_RATIO):
                     self.continue_io_jobs[job_id] = self.io_jobs[job_id]
                     total_io_nodes += nodes
+                else:
+                    self.suspend_io_jobs[job_id] = self.io_jobs[job_id]
+                
+#            if len(self.continue_io_jobs)==0 and len(self.io_job_list)!=0:
+#                job_id = self.io_job_list[0]['jobid']
+#                self.continue_io_jobs[job_id] = self.io_jobs[job_id] 
+                
+        
+        if self.SCHED_POLICY == "FCFS": # based on the I/O start time
+            # sort io jobs
+            self.io_job_list = []
+            for key, value in self.io_jobs.iteritems():
+                item = {}
+                item['jobid'] = key
+                item['io_size'] = value['io_size']
+                item['nodes'] = value['nodes']
+                item['extra'] = value['extra']
+                item['cur_io_starttime'] = value['cur_io_starttime']          
+                self.io_job_list.append(item)
+            
+            self.io_job_list.sort(self.io_start_cmp)  
+           
+            total_io_nodes = 0
+            for job_item in self.io_job_list:
+                job_id = job_item['jobid']
+                nodes = int(self.io_jobs[job_id]['nodes'])
+                
+                if (total_io_nodes+nodes) <= (TOTAL_NODES / IO_BOTTLENECK_RATIO):                
+                    self.continue_io_jobs[job_id] = self.io_jobs[job_id]
+                    total_io_nodes += nodes
+#                if total_io_nodes <= (TOTAL_NODES / IO_BOTTLENECK_RATIO):
+#                    self.continue_io_jobs[job_id] = self.io_jobs[job_id]
+#                    total_io_nodes += nodes
                 else:
                     self.suspend_io_jobs[job_id] = self.io_jobs[job_id]
                 
@@ -1040,7 +1211,7 @@ class BGQsim(Simulator):
                 self.continue_io_jobs[job_id] = self.io_jobs[job_id] 
                 
           
-        if SCHED_POLICY == "FAIRSHARE": # all I/O share the bandwidth
+        if self.SCHED_POLICY == "FAIRSHARE": # all I/O share the bandwidth
             for job_id in self.io_jobs:
                 self.continue_io_jobs[job_id] = self.io_jobs[job_id]
             
@@ -1089,14 +1260,14 @@ class BGQsim(Simulator):
             for job_id in self.continue_io_jobs:
                 num_io_node += int(self.continue_io_jobs[job_id]['nodes'])
                  
-            current_bandwidth_per_node = float(IO_BANDWIDTH) / float(num_io_node)
+            current_bandwidth_per_node = float(IO_BANDWIDTH) / float(num_io_node)       
         
         for job_id in self.continue_io_jobs:
             job_specs = self.continue_io_jobs[job_id]
             data_size = job_specs['io_size']
             num_nodes = int(job_specs['nodes'])
-            rest_io_cnt = job_specs['extra']['extra']['io_rest_cnt']
-            
+            rest_io_cnt = job_specs['extra']['extra']['io_rest_cnt']                
+                
             io_time_required = data_size / (current_bandwidth_per_node * num_nodes)
             
             if rest_io_cnt == 0: # last io call
@@ -1132,19 +1303,109 @@ class BGQsim(Simulator):
                 # retrieve job specs and delete it
                 jobspec = self.io_jobs[job_id]['extra']
                 
+                total_io_cnt = jobspec['extra']['total_io_cnt']
                 io_rest_cnt = jobspec['extra']['io_rest_cnt']
                 io_per_size = jobspec['extra']['io_per_size']
-                io_time = jobspec['extra']['io_per_duration'];
+                io_time = jobspec['extra']['io_per_duration']
                 comp_per_duration = jobspec['extra']['comp_per_duration']
                 nodes = jobspec['extra']['nodes']
-                
+                job_starttime = jobspec['extra']['job_starttime']
+                    
                 self.insert_time_stamp(current_time + io_time_required, "P", {'jobid':job_id,
+                                                                              'total_io_cnt':total_io_cnt,
                                                                               'io_rest_cnt':io_rest_cnt,
                                                                               'io_per_size':io_per_size,
                                                                               'io_per_duration':io_time,
                                                                               'comp_per_duration':comp_per_duration,
-                                                                              'nodes':nodes
+                                                                              'nodes':nodes,
+                                                                              'job_starttime':job_starttime
                                                                               })
+                
+    ''' find optimal solution using DP '''
+    def find_optimal_solu_DP(self, bandwidth_bound, all_io_jobs):
+        
+        num_io_node = 0
+        in_list = []
+        ex_list = []
+        
+        for job_id in self.io_jobs:
+            num_io_node += int(self.io_jobs[job_id]['nodes'])
+            
+        # if no io-contention, skip knapsack
+        if num_io_node <= TOTAL_NODES / IO_BOTTLENECK_RATIO:
+            for job_id in self.io_jobs:
+                in_list.append(job_id)
+            
+            return in_list, ex_list
+        
+        # Compare function for 0-1 Knapsack 
+        def select_max(power1, power2):
+            if power1 >= power2:
+                # not selected
+                return (power1, -1)
+            else:
+                # selected
+                return (power2, 1)
+            
+        length = len(all_io_jobs)
+        
+        # exit if there is no io job
+        if length == 0:
+            return in_list, ex_list
+            
+        weight = range(0, length+1)
+        value = range(0, length+1)
+        jobs = range(0, length+1)
+        
+        val = [[0 for x in range(bandwidth_bound+1)] for y in range(length+1)]
+        solu = [[0 for x in range(bandwidth_bound+1)] for y in range(length+1)]
+                     
+        # initialization
+        for i in range(0, bandwidth_bound+1):
+            val[0][i] = 0
+        
+        for i in range(0, length+1):
+            val[i][0] = 0
+            
+        i = 1    
+        for job_id in all_io_jobs:
+            io_job = all_io_jobs[job_id]
+            
+            weight[i] = int(io_job['nodes'])
+            value[i] = int(io_job['nodes'])
+            
+            if value[i] < 512:
+                value[i] = 512
+                
+            jobs[i] = io_job
+            i += 1
+        
+        # search using dynamic programming
+        for i in range(1, length+1):
+            for bw in range(bandwidth_bound, -1, -1):
+                if weight[i] > bw:
+                    val[i][bw] = val[i-1][bw]
+                    solu[i][bw] = -1                              
+                else:
+                    val[i][bw],solu[i][bw] = select_max(val[i-1][bw], val[i-1][bw-weight[i]]+value[i])                             
+    
+        # print solution
+        bw = bandwidth_bound
+        for i in range(length, 0, -1):
+            if solu[i][bw] == 1:
+                in_list.append(jobs[i]['jobid'])
+                bw -= weight[i]
+            elif solu[i][bw] == -1:
+                ex_list.append(jobs[i]['jobid'])
+            elif solu[i][bw] == -2:
+                ex_list.append(jobs[i]['jobid'])
+        
+        
+        if len(in_list) == 0:
+            in_list.append(ex_list[0])
+            ex_list.pop(0)
+            
+        return in_list, ex_list
                 
     ### update next event in case of computation or I/O events
     def update_job_next_event(self, type, jobspec):            
@@ -1156,13 +1417,17 @@ class BGQsim(Simulator):
             io_size = jobspec['extra']['io_per_size']
             io_rest_cnt = jobspec['extra']['io_rest_cnt']
             comp_per_duration = jobspec['extra']['comp_per_duration']
+            job_starttime = jobspec['extra']['job_starttime']
                         
             # add job to io_jobs
             self.io_jobs[jobid] = {}
+            self.io_jobs[jobid]['jobid'] = jobid
             self.io_jobs[jobid]['io_size'] = io_size
+            self.io_jobs[jobid]['total_size'] = io_size
             self.io_jobs[jobid]['nodes'] = nodes
             self.io_jobs[jobid]['extra'] = jobspec
             self.io_jobs[jobid]['cur_io_starttime'] = self.get_current_time_sec() # current io start time, for priority
+            self.io_jobs[jobid]['job_starttime'] = job_starttime
             
 #            current_time = self.get_current_time_sec()
 #            io_time = jobspec['extra']['io_per_duration']
@@ -1208,7 +1473,7 @@ class BGQsim(Simulator):
             current_time = self.get_current_time_sec()
             computation_time = jobspec['extra']['comp_per_duration'] 
             jobid = jobspec['extra']['jobid']
-            
+                
             self.log_job_event("P", self.get_current_time_date(), jobspec)
             
             ## update io jobs   
@@ -1226,29 +1491,35 @@ class BGQsim(Simulator):
                 if jobid in self.io_jobs:
                     del self.io_jobs[jobid]
                             
-            ## schedule jobs
+            ## schedule jobsf
             self.schedule_io_jobs()
+            
+            ## updata io end
+            self.update_io_end()
 
             # insert end if no io following this computation            
             if jobspec['extra']['io_rest_cnt'] == 0:
                 self.insert_time_stamp(current_time + computation_time, "E", {'jobid':jobid})
                 return
 
-            ## updata io end
-            self.update_io_end()
+            
                  
-            io_time =jobspec['extra']['io_per_duration'] # to be replaced by io-contention model
+            io_time = jobspec['extra']['io_per_duration'] # to be replaced by io-contention model
+            total_io_cnt = jobspec['extra']['total_io_cnt'] 
             io_rest_cnt = jobspec['extra']['io_rest_cnt'] - 1
             io_per_size = jobspec['extra']['io_per_size']
             comp_per_duration = jobspec['extra']['comp_per_duration']
             nodes = jobspec['extra']['nodes']
+            job_starttime = jobspec['extra']['job_starttime']
             
             self.insert_time_stamp(current_time + computation_time, "W", {'jobid':jobid,
+                                                                          'total_io_cnt':total_io_cnt,
                                                                           'io_rest_cnt':io_rest_cnt,
                                                                           'io_per_size':io_per_size,
                                                                           'io_per_duration':io_time,
                                                                           'comp_per_duration':comp_per_duration,
-                                                                          'nodes':nodes 
+                                                                          'nodes':nodes,
+                                                                          'job_starttime':job_starttime
                                                                  })
             
 ##### system related   

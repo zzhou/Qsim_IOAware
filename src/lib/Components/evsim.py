@@ -338,9 +338,9 @@ class EventSimulator(Component):
     # use with caution, list may be extremely long
     def print_all_events(self):
         print "total events:", len(self.event_list) 
-        for event in self.event_list:
-            if 'datetime' in event:
-                print "        -------------------", event['datetime'], event['type'], event['jobid']
+        for i in range(self.get_current_time_stamp(), len(self.event_list)):
+            if 'datetime' in self.event_list[i]:
+                print "        -------------------", self.event_list[i]['datetime'], self.event_list[i]['type'], self.event_list[i]['jobid']
     print_all_events = exposed(print_all_events)
     
     def event_driver(self):
