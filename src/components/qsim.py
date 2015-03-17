@@ -194,7 +194,7 @@ if __name__ == "__main__":
         dest="reserve_ratio", type="float", default=0.0,
         help="float (0--1), specify the proportion of reserved jobs in the job trace, by default it is 0."))
     p.add_option("-u", "--policy", dest="policy", type = "string", default = "FAIRSHARE", 
-        help="I/O-Aware scheduling policy: [ FAIRSHARE | FCFS ]")
+        help="I/O-Aware scheduling policy: [ FAIRSHARE | FCFS | ADAPTIVE | MAXUTIL | MININSTSLD | MINAGGRSLD ]")
 
     start_sec = time.time()
         
