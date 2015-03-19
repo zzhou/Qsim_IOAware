@@ -33,13 +33,13 @@ REMOTE_QUEUE_MANAGER = "cluster-queue-manager"
 WALLTIME_AWARE_CONS = False
 
 MACHINE_ID = 0
-MACHINE_NAME = "Intrepid"
+MACHINE_NAME = "Mira"
 DEFAULT_MAX_HOLDING_SYS_UTIL = 0.6
 SELF_UNHOLD_INTERVAL = 0
 AT_LEAST_HOLD = 600
 MIDPLANE_SIZE = 512
-TOTAL_NODES = 40960
-TOTAL_MIDPLANE = 80
+TOTAL_NODES = 49152
+TOTAL_MIDPLANE = 96
 YIELD_THRESHOLD = 0
 
 BESTFIT_BACKFILL = False
@@ -2480,10 +2480,9 @@ class BGQsim(Simulator):
     def mark_matrix(self):
         idle_midplanes = self.get_midplanes_by_state('idle')
         self.reset_rack_matrix()
-        for name in idle_midplanes:  #sample name for a midplane:  ANL-R15-M0-512
-            row = int(name[5])
-            col = int(name[6])
-            M = int(name[9])
+        for midplane in idle_midplanes:  #sample name for a midplane:  MIR-40CC0-73FF1-512
+            # get row, column and midplane
+            row, col, M = self.get_pos_midplane(midplane)
             self.rack_matrix[row][col][M] = 1
         holden_midplanes = self.get_holden_midplanes()
         if self.coscheduling and self.cosched_scheme == "hold":
@@ -2495,13 +2494,38 @@ class BGQsim(Simulator):
                 
     def reset_rack_matrix(self):
         self.rack_matrix = [
-                [[0,0], [0,0], [0,0], [0,0], [0,0], [0,0], [0,0], [0,0]],
-                [[0,0], [0,0], [0,0], [0,0], [0,0], [0,0], [0,0], [0,0]],
-                [[0,0], [0,0], [0,0], [0,0], [0,0], [0,0], [0,0], [0,0]],
-                [[0,0], [0,0], [0,0], [0,0], [0,0], [0,0], [0,0], [0,0]],
-                [[0,0], [0,0], [0,0], [0,0], [0,0], [0,0], [0,0], [0,0]],
+                [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0]],
+                [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0]],
+                [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0]]
             ]
         #self.rack_matrix = [[[0,0] for i in range(8)] for j in range(5)]
+        
+        
+    def get_pos_midplane(self, midplane):
+        for nodeboard in midplane.node_cards:
+            row = int(nodeboard.id[1])
+            col = int(self.convent_col(nodeboard.id[2]))
+            M = int(nodeboard.id[5])
+
+            return row, col, M
+
+    def convent_col(self, row):
+        if row.isdigit():
+            return row
+        elif row == 'A':
+            return 10
+        elif row == 'B':
+            return 11
+        elif row == 'C':
+            return 12
+        elif row == 'D':
+            return 13
+        elif row == 'E':
+            return 14
+        elif row == 'F':
+            return 15
+        else:
+            return -1
     
     def print_screen(self, cur_event=""):
         '''print screen, show number of waiting jobs, running jobs, busy_nodes%'''

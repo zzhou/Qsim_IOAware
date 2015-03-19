@@ -135,6 +135,8 @@ def parse_work_load(filename):
         line = line.strip('\r')
         if line[0].isdigit():
             temp = parseline(line)
+	elif line[0] == 'N':
+	    continue
         else:
             temp = parseline_alt(line)
         jobid = temp['jobid']

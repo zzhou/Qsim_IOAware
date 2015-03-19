@@ -177,20 +177,33 @@ class Simulator (BGBaseSystem):
         partitions = PartitionDict()
         
         tmp_list = []
+        part_key = {}
+        
 
         # this is going to hold partition objects from the bridge (not our own Partition)
         wiring_cache = {}
         bp_cache = {}
         
-        for partition_def in system_def.getiterator("Partition"):
+        for partition_def in system_def.getiterator("Block"):
+            # skip duplicated partition
+            if part_key.has_key(partition_def.get("name")):
+                continue
+            else:
+                part_key[partition_def.get("name")]=""
+
             node_list = []
             switch_list = []
-            
-            for nc in partition_def.getiterator("NodeCard"): 
+
+            for nc in partition_def.getiterator("NodeBoard"):
                 node_list.append(_get_node_card(nc.get("id")))
 
             nc_count = len(node_list)
-            
+
+            # skip 1K mesh partition if its a default partition file
+            if config_file == "partition_xml/2013-10-10-mira_pure.xml":
+                if NODES_PER_NODECARD * nc_count == 1024 and self.check_mesh(partition_def.get("name")):
+                    continue
+
             if not wiring_cache.has_key(nc_count):
                 wiring_cache[nc_count] = []
             wiring_cache[nc_count].append(partition_def.get("name"))
@@ -205,7 +218,7 @@ class Simulator (BGBaseSystem):
                 node_cards = node_list,
                 switches = switch_list,
                 state = "idle",
-            ))
+                ))
         
         partitions.q_add(tmp_list)
         
@@ -229,6 +242,7 @@ class Simulator (BGBaseSystem):
         # update object state
         self._partitions.clear()
         self._partitions.update(partitions)
+        print "Total partitions: ", len(self._partitions)
 
     
     def reserve_partition (self, name, size=None):
